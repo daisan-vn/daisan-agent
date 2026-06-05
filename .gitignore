@@ -1,3 +1,5 @@
 node_modules/
 .env
 workspaces/
+
+package-lock.json
