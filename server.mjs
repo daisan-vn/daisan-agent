@@ -12,7 +12,6 @@
 import express from 'express';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { BUILD_INSTRUCTIONS, DEFAULT_MODEL } from './instructions.mjs';
 
 // ── load .env (dependency-free) ───────────────────────────────────────────────
@@ -26,6 +25,18 @@ if (existsSync('.env')) {
 			if (val) process.env[m[1]] = val;
 		}
 	}
+}
+
+// Make startup crash-proof + visible: a bad SDK install/binary must NOT silently kill the
+// process at import (that produced Render 502s with no app logs). Lazy-load the SDK per request
+// so the server always binds, /health works, and any SDK error surfaces per-request instead.
+process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
+process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
+
+let _query;
+async function getQuery() {
+	if (!_query) _query = (await import('@anthropic-ai/claude-agent-sdk')).query;
+	return _query;
 }
 
 const PORT = Number(process.env.PORT) || 8787;
@@ -44,6 +55,7 @@ app.use((req, res, next) => {
 	next();
 });
 
+app.get('/', (_req, res) => res.json({ service: 'daisan-agent', ok: true }));
 app.get('/health', (_req, res) => res.json({ ok: true, hasKey: !!process.env.ANTHROPIC_API_KEY }));
 
 // Serve generated sites. NOTE: user-generated content — the daisan.ai frontend should embed
@@ -69,6 +81,7 @@ app.post('/api/generate', async (req, res) => {
 	send('start', { jobId });
 	let tools = 0;
 	try {
+		const query = await getQuery();
 		for await (const message of query({
 			prompt: `${BUILD_INSTRUCTIONS}\n\nUser's idea: ${prompt}`,
 			options: {
